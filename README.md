@@ -6,7 +6,7 @@ A browser Snake game built with plain HTML, CSS, and JavaScript. No frameworks, 
 
 ## Play
 
-Open `index.html` in any modern browser.
+**[Play it in your browser](https://minihercules317.github.io/snake-game/)**, or clone the repo and open `index.html` in any modern browser.
 
 ## Features
 
