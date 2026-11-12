@@ -308,6 +308,60 @@ canvas { display: block; width: 100%; height: 100%; }
 .menu-best { margin: 0; color: var(--muted); font-size: 0.9rem; }
 .menu-best strong { margin-left: 6px; color: var(--gold); font: 700 1.05rem var(--mono); }
 
+/* Colorblind option */
+
+.option {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 12px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.option input {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--accent-2);
+  cursor: pointer;
+}
+
+.option input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+
+.option span { text-align: left; }
+
+@media (max-height: 560px) {
+  .option { min-height: 40px; padding: 2px 10px; }
+}
+
+/* Small boards (e.g. 320×568 portrait): compact the overlays so controls fit without clipping.
+   Overlays also scroll as a fallback; they sit inside the board, so pan-y is not blocked by its touch-action. */
+@media (max-width: 400px), (max-height: 640px) {
+  #menuOverlay,
+  #pauseOverlay {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 8px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+  }
+  :is(#menuOverlay, #pauseOverlay) .card { margin: auto; gap: 6px; }
+  :is(#menuOverlay, #pauseOverlay) .btn { min-width: 0; max-width: 100%; }
+  #menuOverlay .title { font-size: clamp(1.7rem, 7vmin, 2.2rem); }
+  #menuOverlay .subtitle { margin: -2px 0 0; font-size: 0.85rem; }
+  #menuOverlay .difficulty legend { margin-bottom: 4px; }
+  #menuOverlay .segmented span { padding: 6px 2px; font-size: 0.82rem; }
+  #menuOverlay .diff-desc { min-height: 1.2em; margin: 6px 0 0; font-size: 0.8rem; }
+  #menuOverlay .menu-best { font-size: 0.82rem; }
+  #menuOverlay .btn { padding: 9px 22px; }
+  .option { min-height: 44px; padding: 2px 10px; }
+}
+
 /* Buttons */
 
 .btn-col { display: flex; flex-direction: column; gap: 8px; width: min(100%, 260px); }

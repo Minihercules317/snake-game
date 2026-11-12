@@ -32,6 +32,7 @@
     highs: 'snake.highscores.v1',
     difficulty: 'snake.difficulty',
     muted: 'snake.muted',
+    colorblind: 'snake.colorblind',
   };
 
   // ═══════════════════════════════ Storage ══════════════════════════════
@@ -461,6 +462,7 @@
     sumFood: $('sumFood'),
     sumTime: $('sumTime'),
     radios: [...document.querySelectorAll('input[name="difficulty"]')],
+    colorblindBoxes: [$('colorblindMenu'), $('colorblindPause')],
   };
 
   // ═══════════════════════════════ Effects ══════════════════════════════
@@ -533,7 +535,12 @@
     dead: { head: [251, 113, 133], tail: [71, 85, 105], glow: 'rgba(251, 113, 133, 0.35)' },
     flash: { head: [255, 255, 255], tail: [254, 205, 211], glow: 'rgba(255, 255, 255, 0.6)' },
     win: { head: [253, 230, 138], tail: [217, 119, 6], glow: 'rgba(251, 191, 36, 0.6)' },
+    // Red–green colorblind mode: blue/white palette that relies on luminance and shape.
+    cb: { head: [191, 232, 253], tail: [40, 150, 226], glow: 'rgba(125, 211, 252, 0.5)', cb: true },
+    cbDead: { head: [226, 232, 240], tail: [100, 116, 139], glow: 'rgba(226, 232, 240, 0.3)', cb: true },
   };
+
+  let colorblind = store.get(STORAGE.colorblind, false) === true;
 
   function resize() {
     const rect = el.canvas.getBoundingClientRect();
@@ -626,11 +633,12 @@
   function drawSnake(game, now) {
     const pts = snakePath(game);
 
-    let palette = PALETTE.alive;
+    let palette = colorblind ? PALETTE.cb : PALETTE.alive;
     if (game.won) palette = PALETTE.win;
     else if (!game.alive) {
       const since = now - game.diedAt;
-      palette = since < 650 && Math.floor(since / 110) % 2 === 0 ? PALETTE.flash : PALETTE.dead;
+      const dead = colorblind ? PALETTE.cbDead : PALETTE.dead;
+      palette = since < 650 && Math.floor(since / 110) % 2 === 0 ? PALETTE.flash : dead;
     }
 
     // A long snake can wind around the board several times. Draw every copy
@@ -681,6 +689,17 @@
     ctx.stroke();
     ctx.restore();
 
+    // Pale rim: keeps the silhouette readable against the board regardless of hue
+    if (palette.cb) {
+      ctx.strokeStyle = '#f0f9ff';
+      ctx.lineWidth = width + Math.max(2, cell * 0.1);
+      ctx.beginPath();
+      ctx.moveTo(px(pts[0]), py(pts[0]));
+      for (let i = 1; i < n; i++) ctx.lineTo(px(pts[i]), py(pts[i]));
+      if (n === 1) ctx.lineTo(px(pts[0]) + 0.01, py(pts[0]));
+      ctx.stroke();
+    }
+
     // Gradient body, drawn tail → head so the head sits on top
     ctx.lineWidth = width;
     for (let i = n - 2; i >= 0; i--) {
@@ -702,15 +721,21 @@
     // Head
     const hx = px(pts[0]);
     const hy = py(pts[0]);
+    if (palette.cb) {
+      ctx.fillStyle = '#f0f9ff';
+      ctx.beginPath();
+      ctx.arc(hx, hy, width * 0.56 + Math.max(1, cell * 0.05), 0, TAU);
+      ctx.fill();
+    }
     ctx.fillStyle = `rgb(${palette.head.join(',')})`;
     ctx.beginPath();
     ctx.arc(hx, hy, width * 0.56, 0, TAU);
     ctx.fill();
 
-    drawEyes(hx, hy, DIRS[game.dir], !game.alive && !game.won);
+    drawEyes(hx, hy, DIRS[game.dir], !game.alive && !game.won, !!palette.cb);
   }
 
-  function drawEyes(hx, hy, d, dead) {
+  function drawEyes(hx, hy, d, dead, cb) {
     const perp = { x: -d.y, y: d.x };
     const fwd = cell * 0.14;
     const side = cell * 0.2;
@@ -726,6 +751,13 @@
         ctx.moveTo(ex + r, ey - r); ctx.lineTo(ex - r, ey + r);
         ctx.stroke();
       } else {
+        if (cb) {
+          // Dark socket so the eyes stand out on the light head
+          ctx.fillStyle = '#0b1220';
+          ctx.beginPath();
+          ctx.arc(ex, ey, cell * 0.155, 0, TAU);
+          ctx.fill();
+        }
         ctx.fillStyle = '#f8fafc';
         ctx.beginPath();
         ctx.arc(ex, ey, cell * 0.12, 0, TAU);
@@ -744,6 +776,29 @@
     const pop = easeOutBack(Math.min(1, Math.max(0, now - f.born) / 280));
     const r = cell * 0.34 * pop * (1 + Math.sin(now / 170) * 0.06);
     if (r <= 0) return;
+
+    if (colorblind) {
+      // Bright solid diamond with a dark outline: shape and luminance, not hue
+      const d = r * 1.2;
+      ctx.save();
+      ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+      ctx.shadowBlur = cell * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - d);
+      ctx.lineTo(cx + d, cy);
+      ctx.lineTo(cx, cy + d);
+      ctx.lineTo(cx - d, cy);
+      ctx.closePath();
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.lineJoin = 'miter';
+      ctx.lineWidth = Math.max(1.5, cell * 0.07);
+      ctx.strokeStyle = '#0b1220';
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
 
     ctx.save();
     ctx.shadowColor = 'rgba(251, 113, 133, 0.9)';
@@ -770,30 +825,32 @@
     const cx = (b.x + 0.5) * cell;
     const cy = (b.y + 0.5) * cell;
     const pop = easeOutBack(Math.min(1, Math.max(0, now - b.born) / 320));
-    const blinking = remaining < 0.3 && Math.floor(now / 120) % 2 === 0;
+    const cb = colorblind;
+    // Colorblind mode never dims or resizes the bonus; the shrinking ring shows the time left.
+    const blinking = !cb && remaining < 0.3 && Math.floor(now / 120) % 2 === 0;
 
     ctx.save();
     ctx.globalAlpha = blinking ? 0.35 : 1;
 
     // Countdown ring
-    ctx.strokeStyle = 'rgba(251, 191, 36, 0.25)';
-    ctx.lineWidth = cell * 0.07;
+    ctx.strokeStyle = cb ? '#64748b' : 'rgba(251, 191, 36, 0.25)';
+    ctx.lineWidth = cb ? Math.max(2, cell * 0.1) : cell * 0.07;
     ctx.beginPath();
     ctx.arc(cx, cy, cell * 0.47, 0, TAU);
     ctx.stroke();
-    ctx.strokeStyle = '#fbbf24';
+    ctx.strokeStyle = cb ? '#ffd21f' : '#fbbf24';
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.arc(cx, cy, cell * 0.47, -Math.PI / 2, -Math.PI / 2 + TAU * remaining);
     ctx.stroke();
 
-    // Spinning star
+    // Spinning star (upright in colorblind mode)
     ctx.translate(cx, cy);
-    ctx.rotate(now / 650);
+    if (!cb) ctx.rotate(now / 650);
     ctx.scale(pop, pop);
     ctx.shadowColor = 'rgba(251, 191, 36, 0.95)';
     ctx.shadowBlur = cell * 0.9;
-    const outer = cell * 0.33;
+    const outer = cell * (cb ? 0.3 : 0.33);
     const inner = outer * 0.48;
     ctx.beginPath();
     for (let i = 0; i < 10; i++) {
@@ -802,6 +859,17 @@
       ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
     }
     ctx.closePath();
+    if (cb) {
+      ctx.fillStyle = '#ffd21f';
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(1.5, cell * 0.06);
+      ctx.strokeStyle = '#422006';
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     const g = ctx.createRadialGradient(0, -outer * 0.3, 0, 0, 0, outer);
     g.addColorStop(0, '#fffbeb');
     g.addColorStop(0.5, '#fcd34d');
@@ -873,8 +941,8 @@
     turn: () => Sound.turn(),
     eat: (cell, pts, g) => {
       Sound.eat(g.eaten);
-      burst(cell, ['#fb7185', '#fda4af', '#4ade80', '#bbf7d0'], 16, 7);
-      floater(cell, `+${pts}`, '#bbf7d0');
+      burst(cell, colorblind ? ['#ffffff', '#e0f2fe', '#7dd3fc'] : ['#fb7185', '#fda4af', '#4ade80', '#bbf7d0'], 16, 7);
+      floater(cell, `+${pts}`, colorblind ? '#e0f2fe' : '#bbf7d0');
       onScore(g);
     },
     bonus: (cell, pts, g) => {
@@ -892,7 +960,7 @@
       Sound.die();
       fx.shake = SHAKE_MS;
       fx.flash = FLASH_MS;
-      burst(g.snake[0], ['#fb7185', '#f43f5e', '#fecdd3', '#ffffff'], 36, 10);
+      burst(g.snake[0], colorblind ? ['#e2e8f0', '#94a3b8', '#ffffff'] : ['#fb7185', '#f43f5e', '#fecdd3', '#ffffff'], 36, 10);
       endGame(false);
     },
     win: (g) => {
@@ -972,6 +1040,13 @@
     el.menuBest.textContent = best();
     if (changed && sound) Sound.select();
     updateHud();
+  }
+
+  /** Applies immediately (the renderer reads `colorblind` every frame); never touches game state. */
+  function setColorblind(value, { persist = true } = {}) {
+    colorblind = value === true;
+    for (const box of el.colorblindBoxes) box.checked = colorblind;
+    if (persist) store.set(STORAGE.colorblind, colorblind);
   }
 
   function cycleDifficulty(delta) {
@@ -1082,8 +1157,12 @@
     const target = e.target;
     const onButton = target instanceof HTMLButtonElement;
     const onRadio = target instanceof HTMLInputElement && target.type === 'radio';
+    const onCheckbox = target instanceof HTMLInputElement && target.type === 'checkbox';
     const key = e.key;
     const dir = KEY_DIRS[e.code];
+
+    // Space on a focused checkbox is the browser's native toggle, not pause/resume.
+    if (onCheckbox && key === ' ') return;
 
     // ── Movement
     if (dir) {
@@ -1205,6 +1284,10 @@
     r.addEventListener('change', () => { Sound.unlock(); setDifficulty(r.value); });
   }
 
+  for (const box of el.colorblindBoxes) {
+    box.addEventListener('change', () => { Sound.unlock(); setColorblind(box.checked); });
+  }
+
   // Auto-pause when the player leaves the tab or window.
   document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
   window.addEventListener('blur', pauseGame);
@@ -1243,6 +1326,7 @@
     el.muteBtn.setAttribute('aria-label', 'Unmute (M)');
     el.muteBtn.title = 'Unmute (M)';
   }
+  setColorblind(colorblind, { persist: false });
   setState('menu');
   setDifficulty(difficulty, { sound: false });
   showOverlay('menu');

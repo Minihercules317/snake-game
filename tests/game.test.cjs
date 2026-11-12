@@ -29,14 +29,17 @@ function boot({ saved = {}, storageBlocked = false, audio = 'available', width =
     const gradient = () => ({ addColorStop(offset) { assert.ok(offset >= 0 && offset <= 1); } });
     return {
       setTransform(...args) { finite(args); transform = args; },
+      globalAlpha: 1,
+      arcs: [],
+      scales: [],
       save() { stack.push([...transform]); },
       restore() { assert.ok(stack.length, 'Unbalanced canvas restore'); transform = stack.pop(); },
       translate(x, y) { finite([x, y]); transform[4] += x; transform[5] += y; },
       rotate(angle) { finite([angle]); },
-      scale(x, y) { finite([x, y]); },
+      scale(x, y) { finite([x, y]); this.scales.push([x, y]); },
       moveTo(x, y) { finite([x, y]); },
       lineTo(x, y) { finite([x, y]); drawing.push([x + transform[4], y + transform[5]]); },
-      arc(x, y, radius, start, end) { finite([x, y, radius, start, end]); assert.ok(radius >= 0); },
+      arc(x, y, radius, start, end) { finite([x, y, radius, start, end]); assert.ok(radius >= 0); this.arcs.push({ start, end, alpha: this.globalAlpha }); },
       ellipse(x, y, rx, ry, rotation, start, end) { finite([x, y, rx, ry, rotation, start, end]); assert.ok(rx >= 0 && ry >= 0); },
       createRadialGradient(...args) { finite(args); assert.ok(args[2] >= 0 && args[5] >= 0); return gradient(); },
       fillRect(...args) { finite(args); },
@@ -78,6 +81,9 @@ function boot({ saved = {}, storageBlocked = false, audio = 'available', width =
   const elements = {};
   for (const match of html.matchAll(/<([a-z][a-z0-9]*)\b[^>]*\bid="([^"]+)"[^>]*>/g)) {
     elements[match[2]] = match[1] === 'button' ? new Button(match[2]) : new Element(match[2]);
+  }
+  for (const id of ['colorblindMenu', 'colorblindPause']) {
+    const box = new Input(); box.id = id; box.type = 'checkbox'; box.checked = false; elements[id] = box;
   }
   const radios = [...html.matchAll(/<input[^>]*name="difficulty"[^>]*value="([^"]+)"/g)].map(m => new Input(m[1]));
   const document = new Element();
@@ -132,7 +138,7 @@ function boot({ saved = {}, storageBlocked = false, audio = 'available', width =
   const instrumented = source.replace(/\}\)\(\);\s*$/, `globalThis.app = {
     SnakeGame, DIFFICULTIES, Sound, el, fx, snakePath, drawSnake, render, resize,
     startGame, pauseGame, resumeGame, goToMenu, setDifficulty, best,
-    get game() { return game; }, get state() { return state; }
+    get game() { return game; }, get state() { return state; }, get colorblind() { return colorblind; }
   }; })();`);
   vm.runInNewContext(instrumented, sandbox, { filename: 'game.js' });
   const app = sandbox.app;
@@ -356,6 +362,78 @@ test('unavailable AudioContext or device does not prevent play, scoring or mute'
     const h = boot({ audio }); h.startGame(); h.app.game.food = { x: 9, y: 10 }; h.app.game.step(); h.key('m', 'KeyM'); h.tick();
     assert.equal(h.app.state, 'playing'); assert.equal(h.app.game.score, 10);
   }
+});
+
+test('colorblind checkboxes sync, persist, tolerate bad/denied storage, and default off', () => {
+  const h = boot();
+  const { colorblindMenu: menu, colorblindPause: pause } = h.elements;
+  assert.equal(h.app.colorblind, false); assert.equal(menu.checked, false); assert.equal(pause.checked, false);
+  pause.checked = true; pause.fire('change');
+  assert.equal(h.app.colorblind, true); assert.equal(menu.checked, true);
+  assert.equal(h.storage.get('snake.colorblind'), 'true');
+  const reloaded = boot({ saved: Object.fromEntries(h.storage) });
+  assert.equal(reloaded.app.colorblind, true);
+  assert.equal(reloaded.elements.colorblindMenu.checked, true); assert.equal(reloaded.elements.colorblindPause.checked, true);
+  for (const bad of ['"yes"', '1', '{', 'null']) assert.equal(boot({ saved: { 'snake.colorblind': bad } }).app.colorblind, false, bad);
+  const blocked = boot({ storageBlocked: true });
+  blocked.elements.colorblindMenu.checked = true; blocked.elements.colorblindMenu.fire('change');
+  assert.equal(blocked.app.colorblind, true); assert.equal(blocked.elements.colorblindPause.checked, true);
+});
+
+test('colorblind mode applies mid-run without changing game state, and Space on its checkbox stays native', () => {
+  const h = boot(); h.tick(100); // let the initial Play autofocus callback run before gameplay starts
+  h.startGame(); h.elements.canvas.focus(); h.app.game.food = { x: 9, y: 10, born: 0 }; h.app.game.step();
+  h.app.game.spawnBonus(); h.tick(100); h.key(' ', 'Space');
+  assert.equal(h.app.state, 'paused');
+  const before = { score: h.app.game.score, time: h.app.game.time, snake: plain(h.app.game.snake), cfg: h.app.game.cfg };
+  const box = h.elements.colorblindPause; box.focus();
+  assert.equal(h.key(' ', 'Space'), false); assert.equal(h.app.state, 'paused'); // browser toggles it natively
+  box.checked = true; box.fire('change');
+  assert.equal(h.app.colorblind, true); assert.equal(h.app.state, 'paused');
+  assert.deepEqual({ score: h.app.game.score, time: h.app.game.time, snake: plain(h.app.game.snake), cfg: h.app.game.cfg }, before);
+  box.blur(); h.key(' ', 'Space'); assert.equal(h.app.state, 'playing');
+  // Menu defaults: Space/Enter on the menu checkbox do not start via Space, Enter still starts.
+  h.goToMenu(); h.elements.colorblindMenu.focus();
+  assert.equal(h.key(' ', 'Space'), false); assert.equal(h.app.state, 'menu');
+  h.key('Enter', 'Enter'); assert.equal(h.app.state, 'playing');
+});
+
+test('colorblind rendering is valid on narrow/wrapping boards, near bonus expiry, and in end states', () => {
+  for (const [mode, width] of [['easy', 120], ['normal', 301.5]]) {
+    const h = boot({ width, saved: { 'snake.colorblind': 'true' } });
+    h.setDifficulty(mode); h.startGame();
+    const g = h.app.game; g.food = { x: 9, y: 10, born: 0 }; g.step();
+    for (const left of [6000, 1500, 100]) { g.bonus = { x: 2, y: 2, born: 0, expires: g.time + left, life: 6000 }; h.tick(150); }
+    g.snake = [{ x: 0, y: 0 }, { x: 19, y: 0 }, { x: 18, y: 0 }]; g.prevHead = { x: 19, y: 0 }; h.tick(40);
+    g.die('self'); h.tick(16); h.tick(850);
+    h.startGame(); h.app.game.win(); h.tick(16); h.tick(1400);
+    assert.equal(h.elements.canvas.context.stackDepth, 0);
+  }
+});
+
+test('active near-expiry colorblind bonus stays full opacity and constant size while the ring shrinks', () => {
+  const h = boot({ saved: { 'snake.colorblind': 'true' } });
+  h.startGame();
+  const g = h.app.game; g.food = { x: 9, y: 10, born: 0 }; g.step();
+  const ctx = h.elements.canvas.context;
+  const sample = (left, dt) => {
+    // Isolate the countdown from the 320 ms spawn animation.
+    g.bonus = { x: 2, y: 2, born: -320, expires: g.time + left, life: 6000 };
+    ctx.arcs.length = 0; ctx.scales.length = 0;
+    h.tick(dt);
+    assert.ok(g.bonus, `bonus must still be active at ${left}ms left`);
+    const ring = ctx.arcs.filter(a => a.start === -Math.PI / 2);
+    assert.equal(ring.length, 1, 'one countdown arc drawn');
+    return { length: ring[0].end - ring[0].start, alpha: ring[0].alpha, scales: ctx.scales.map(s => s.join(',')).join('|') };
+  };
+  const far = sample(5000, 16);
+  const near = sample(1500, 16);
+  const nearer = sample(800, 37); // different timestamp: a size pulse would change the scale
+  const nearest = sample(800, 16);
+  assert.equal(ctx.stackDepth, 0);
+  for (const s of [near, nearer, nearest]) assert.equal(s.alpha, 1);
+  assert.ok(near.length < far.length && nearer.length < near.length, 'countdown arc shrinks');
+  assert.equal(near.scales, nearer.scales); assert.equal(nearer.scales, nearest.scales);
 });
 
 test('canvas scales for device pixel ratios and draws food, bonuses, effects and end states', () => {
